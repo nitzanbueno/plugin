@@ -219,7 +219,7 @@ namespace MusicBeeRemote.Core.Network
                         break;
                 }
 
-                if (Equals(ipAddress == IPAddress.Loopback))
+                if (Equals(ipAddress, IPAddress.Loopback))
                 {
                     isAllowed = true;
                 }
