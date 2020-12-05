@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Timers;
 using MusicBeeRemote.Core.ApiAdapters;
 using MusicBeeRemote.Core.Events.Notifications;
@@ -32,10 +32,10 @@ namespace MusicBeeRemote.Core.Monitoring
 
         public void Start()
         {
-            _volumeSubscriptionToken = _hub.Subscribe<VolumeLevelChangedEvent>(_ => { SendVolume(); });
-            _muteSubscriptionToken = _hub.Subscribe<VolumeMuteChangedEvent>(_ => { SendMuteState(); });
-            _playStateSubscriptionToken = _hub.Subscribe<PlayStateChangedEvent>(_ => { SendPlayState(); });
-            _playingListSubscriptionToken = _hub.Subscribe<NowPlayingListChangedEvent>(_ => { });
+            _volumeSubscriptionToken = _hub.Subscribe<VolumeLevelChangedEvent>(_ => SendVolume());
+            _muteSubscriptionToken = _hub.Subscribe<VolumeMuteChangedEvent>(_ => SendMuteState());
+            _playStateSubscriptionToken = _hub.Subscribe<PlayStateChangedEvent>(_ => SendPlayState());
+            _playingListSubscriptionToken = _hub.Subscribe<NowPlayingListChangedEvent>(_ => SendNowPlayingList());
 
             _timer = new Timer { Interval = 1000 };
             _timer.Elapsed += HandleTimerElapsed;
@@ -93,6 +93,12 @@ namespace MusicBeeRemote.Core.Monitoring
         private void SendPlayState()
         {
             var stateMessage = new SocketMessage(Constants.PlayerState, _apiAdapter.GetState());
+            _hub.Publish(new PluginResponseAvailableEvent(stateMessage));
+        }
+
+        private void SendNowPlayingList()
+        {
+            var stateMessage = new SocketMessage(Constants.NowPlayingListChanged);
             _hub.Publish(new PluginResponseAvailableEvent(stateMessage));
         }
 
