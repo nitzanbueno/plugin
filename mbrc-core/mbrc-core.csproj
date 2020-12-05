@@ -50,6 +50,9 @@
     <CodeAnalysisRuleSet>mbrc-core-1.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="Fleck, Version=1.1.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\Fleck.1.1.0\lib\net40\Fleck.dll</HintPath>
+    </Reference>
     <Reference Include="LiteDB, Version=4.1.4.0, Culture=neutral, PublicKeyToken=4ee40123013c9f27, processorArchitecture=MSIL">
       <HintPath>..\packages\LiteDB.4.1.4\lib\net40\LiteDB.dll</HintPath>
     </Reference>
@@ -230,7 +233,6 @@
     <Compile Include="Core\Network\Http\Router.cs" />
     <Compile Include="Core\Network\ServiceDiscovery.cs" />
     <Compile Include="Core\Network\SocketConnection.cs" />
-    <Compile Include="Core\Network\SocketPacket.cs" />
     <Compile Include="Core\Network\SocketServer.cs" />
     <Compile Include="Core\Network\SocketTester.cs" />
     <Compile Include="Core\Network\Tools.cs" />

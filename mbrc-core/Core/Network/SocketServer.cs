@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 using System.Timers;
+using Fleck;
 using MusicBeeRemote.Core.Events;
 using MusicBeeRemote.Core.Events.Status.Internal;
 using MusicBeeRemote.Core.Model.Entities;
@@ -23,25 +24,20 @@ namespace MusicBeeRemote.Core.Network
     /// </summary>
     public sealed class SocketServer : IDisposable
     {
-        private const string NewLine = "\r\n";
+        private const string NewLine = "\n";
 
         private readonly Logger _logger = LogManager.GetCurrentClassLogger();
         private readonly ProtocolHandler _handler;
-        private readonly ConcurrentDictionary<string, Socket> _availableWorkerSockets;
+        private readonly ConcurrentDictionary<string, IWebSocketConnection> _availableWorkerSockets;
         private readonly TaskFactory _factory;
         private readonly ITinyMessengerHub _hub;
         private readonly Authenticator _auth;
         private readonly PersistenceManager _settings;
 
         /// <summary>
-        /// The main socket. This is the Socket that listens for new client connections.
+        /// The web socket server.
         /// </summary>
-        private Socket _mainSocket;
-
-        /// <summary>
-        /// The worker callback.
-        /// </summary>
-        private AsyncCallback _workerCallback;
+        private WebSocketServer _mainWsServer;
 
         private bool _isDisposed;
         private Timer _pingTimer;
@@ -56,7 +52,7 @@ namespace MusicBeeRemote.Core.Network
             _hub = hub ?? throw new ArgumentNullException(nameof(hub));
             _auth = auth;
             _settings = settings;
-            _availableWorkerSockets = new ConcurrentDictionary<string, Socket>();
+            _availableWorkerSockets = new ConcurrentDictionary<string, IWebSocketConnection>();
             TaskScheduler scheduler = new LimitedTaskScheduler(2);
             _factory = new TaskFactory(scheduler);
 
@@ -72,26 +68,17 @@ namespace MusicBeeRemote.Core.Network
         }
 
         /// <summary>
-        /// It starts the SocketServer.
+        /// It starts the websocket server.
         /// </summary>
         public void Start()
         {
             _logger.Debug($"Socket starts listening on port: {_settings.UserSettingsModel.ListeningPort}");
             try
             {
-                _mainSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                // Create the websocket server
+                _mainWsServer = new WebSocketServer($"ws://0.0.0.0:{_settings.UserSettingsModel.ListeningPort}");
+                _mainWsServer.Start(OnClientConnect);
 
-                // Create the listening socket.
-                var ipLocal = new IPEndPoint(IPAddress.Any, Convert.ToInt32(_settings.UserSettingsModel.ListeningPort));
-
-                // Bind to local IP address.
-                _mainSocket.Bind(ipLocal);
-
-                // Start Listening.
-                _mainSocket.Listen(4);
-
-                // Create the call back for any client connections.
-                _mainSocket.BeginAccept(OnClientConnect, null);
                 _hub.Publish(new SocketStatusChanged(true));
 
                 _pingTimer = new Timer(15000);
@@ -112,7 +99,7 @@ namespace MusicBeeRemote.Core.Network
             _logger.Debug("Stopping socket service");
             try
             {
-                _mainSocket?.Close();
+                _mainWsServer?.Dispose();
 
                 foreach (var wSocket in _availableWorkerSockets.Values)
                 {
@@ -122,10 +109,9 @@ namespace MusicBeeRemote.Core.Network
                     }
 
                     wSocket.Close();
-                    wSocket.Dispose();
                 }
 
-                _mainSocket = null;
+                _mainWsServer = null;
             }
             catch (Exception ex)
             {
@@ -155,8 +141,7 @@ namespace MusicBeeRemote.Core.Network
 
             if (disposing)
             {
-                _mainSocket?.Close();
-                _mainSocket?.Dispose();
+                _mainWsServer?.Dispose();
                 _pingTimer.Dispose();
             }
 
@@ -178,7 +163,6 @@ namespace MusicBeeRemote.Core.Network
                 }
 
                 workerSocket.Close();
-                workerSocket.Dispose();
                 _hub.Publish(new ClientDisconnectedEvent(connectionId));
             }
             catch (Exception ex)
@@ -204,25 +188,15 @@ namespace MusicBeeRemote.Core.Network
         }
 
         // this is the call back function,
-        private void OnClientConnect(IAsyncResult ar)
+        private void OnClientConnect(IWebSocketConnection ws)
         {
             try
             {
-                if (_mainSocket == null)
-                {
-                    return;
-                }
-
-                // Here we complete/end the BeginAccept asynchronous call
-                // by calling EndAccept() - Which returns the reference
-                // to a new Socket object.
-                var workerSocket = _mainSocket.EndAccept(ar);
-
                 // Validate If client should connect.
-                var ipAddress = ((IPEndPoint)workerSocket.RemoteEndPoint).Address;
-                var ipString = ipAddress.ToString();
+                string ipString = ws.ConnectionInfo.ClientIpAddress;
+                IPAddress ipAddress = IPAddress.Parse(ipString);
 
-                var isAllowed = false;
+                bool isAllowed = false;
                 switch (_settings.UserSettingsModel.FilterSelection)
                 {
                     case FilteringSelection.Specific:
@@ -245,24 +219,23 @@ namespace MusicBeeRemote.Core.Network
                         break;
                 }
 
-                if (Equals(ipAddress, IPAddress.Loopback))
+                if (Equals(ipAddress == IPAddress.Loopback))
                 {
                     isAllowed = true;
                 }
 
                 if (!isAllowed)
                 {
-                    workerSocket.Send(
+                    ws.Send(
                         Encoding.UTF8.GetBytes(new SocketMessage(Constants.NotAllowed, string.Empty).ToJsonString()));
-                    workerSocket.Close();
+                    ws.Close();
                     _logger.Debug($"Client {ipString} was force disconnected IP was not in the allowed addresses");
-                    _mainSocket.BeginAccept(OnClientConnect, null);
                     return;
                 }
 
                 var connectionId = IdGenerator.GetUniqueKey();
 
-                if (!_availableWorkerSockets.TryAdd(connectionId, workerSocket))
+                if (!_availableWorkerSockets.TryAdd(connectionId, ws))
                 {
                     return;
                 }
@@ -272,7 +245,7 @@ namespace MusicBeeRemote.Core.Network
 
                 // Let the worker Socket do the further processing
                 // for the just connected client.
-                WaitForData(workerSocket, connectionId);
+                WaitForData(ws, connectionId);
             }
             catch (ObjectDisposedException)
             {
@@ -286,128 +259,22 @@ namespace MusicBeeRemote.Core.Network
             {
                 _logger.Debug($"OnClientConnect Exception : {ex.Message}");
             }
-            finally
-            {
-                try
-                {
-                    // Since the main Socket is now free, it can go back and
-                    // wait for the other clients who are attempting to connect
-                    _mainSocket?.BeginAccept(OnClientConnect, null);
-                }
-                catch (Exception e)
-                {
-                    _logger.Debug($"OnClientConnect Exception : {e.Message}");
-                }
-            }
         }
 
         // Start waiting for data from the client
-        private void WaitForData(Socket socket, string connectionId, SocketPacket packet = null)
+        private void WaitForData(IWebSocketConnection ws, string connectionId)
         {
-            try
+            ws.OnMessage = message => _handler.ProcessIncomingMessage(message, connectionId);
+            ws.OnClose = () =>
             {
-                if (_workerCallback == null)
-                {
-                    // Specify the call back function which is to be
-                    // invoked when there is any write activity by the
-                    // connected client.
-                    _workerCallback = OnDataReceived;
-                }
-
-                var socketPacket = packet ?? new SocketPacket(socket, connectionId);
-
-                socket.BeginReceive(
-                    socketPacket.GetDataBuffer(),
-                    0,
-                    socketPacket.GetDataBuffer().Length,
-                    SocketFlags.None,
-                    _workerCallback,
-                    socketPacket);
-            }
-            catch (SocketException se)
-            {
-                _logger.Debug(se, "On WaitForData");
-                if (se.ErrorCode == 10053)
-                {
-                    _hub.Publish(new ClientDisconnectedEvent(connectionId));
-                }
-            }
-        }
-
-        // This is the call back function which will be invoked when the socket
-        // detects any client writing of data on the stream
-        private void OnDataReceived(IAsyncResult ar)
-        {
-            var connectionId = string.Empty;
-            try
-            {
-                var socketData = (SocketPacket)ar.AsyncState;
-
-                // Complete the BeginReceive() asynchronous call by EndReceive() method
-                // which will return the number of characters written to the stream
-                // by the client.
-                connectionId = socketData.ConnectionId;
-
-                var iRx = socketData.WorkerSocket.EndReceive(ar);
-                var chars = new char[iRx + 1];
-
-                var decoder = Encoding.UTF8.GetDecoder();
-
-                decoder.GetChars(socketData.GetDataBuffer(), 0, iRx, chars, 0);
-                if (chars.Length == 1 && chars[0] == 0)
-                {
-                    socketData.WorkerSocket.Close();
-                    socketData.WorkerSocket.Dispose();
-                    return;
-                }
-
-                var message = new string(chars).Replace("\0", string.Empty);
-
-                if (string.IsNullOrEmpty(message))
-                {
-                    return;
-                }
-
-                if (!message.EndsWith("\r\n", StringComparison.InvariantCultureIgnoreCase))
-                {
-                    socketData.Partial.Append(message);
-                    WaitForData(socketData.WorkerSocket, socketData.ConnectionId, socketData);
-                    return;
-                }
-
-                if (socketData.Partial.Length > 0)
-                {
-                    message = socketData.Partial.Append(message).ToString();
-                    socketData.Partial.Clear();
-                }
-
-                _factory.StartNew(() => _handler.ProcessIncomingMessage(message, socketData.ConnectionId));
-
-                // Continue the waiting for data on the Socket.
-                WaitForData(socketData.WorkerSocket, socketData.ConnectionId, socketData);
-            }
-            catch (ObjectDisposedException)
-            {
+                _availableWorkerSockets.TryRemove(connectionId, out _);
                 _hub.Publish(new ClientDisconnectedEvent(connectionId));
-                _logger.Debug("OnDataReceived: Socket has been closed");
-            }
-            catch (SocketException se)
+                _logger.Debug($"Websocket has been closed: {connectionId}");
+            };
+            ws.OnError = e =>
             {
-                // Error code for Connection reset by peer
-                if (se.ErrorCode == 10054)
-                {
-                    if (_availableWorkerSockets.ContainsKey(connectionId))
-                    {
-                        _availableWorkerSockets.TryRemove(connectionId, out _);
-                    }
-
-                    _hub.Publish(new ClientDisconnectedEvent(connectionId));
-                }
-                else
-                {
-                    _logger.Error(se, "On DataReceive");
-                }
-            }
+                _logger.Error(e, "Error in client");
+            };
         }
 
         /// <summary>
@@ -418,6 +285,7 @@ namespace MusicBeeRemote.Core.Network
         private void Send(SocketMessage message, string connectionId)
         {
             var serializedMessage = JsonConvert.SerializeObject(message);
+
             if (message.NewLineTerminated)
             {
                 serializedMessage += NewLine;
@@ -433,10 +301,9 @@ namespace MusicBeeRemote.Core.Network
 
             try
             {
-                var data = Encoding.UTF8.GetBytes(serializedMessage + NewLine);
                 if (_availableWorkerSockets.TryGetValue(connectionId, out var wSocket))
                 {
-                    wSocket.Send(data);
+                    wSocket.Send(serializedMessage).Wait();
                 }
             }
             catch (Exception ex)
@@ -456,8 +323,6 @@ namespace MusicBeeRemote.Core.Network
 
             try
             {
-                var data = Encoding.UTF8.GetBytes(message + NewLine);
-
                 foreach (var key in _availableWorkerSockets.Keys)
                 {
                     if (!_availableWorkerSockets.TryGetValue(key, out var worker))
@@ -465,7 +330,7 @@ namespace MusicBeeRemote.Core.Network
                         continue;
                     }
 
-                    var isConnected = worker != null && worker.Connected;
+                    var isConnected = worker != null && worker.IsAvailable;
                     if (!isConnected)
                     {
                         RemoveDeadSocket(key);
@@ -474,7 +339,7 @@ namespace MusicBeeRemote.Core.Network
 
                     if (isConnected && _auth.CanConnectionReceive(key) && _auth.IsConnectionBroadcastEnabled(key))
                     {
-                        worker.Send(data);
+                        worker.Send(message).Wait();
                     }
                 }
             }
@@ -487,7 +352,7 @@ namespace MusicBeeRemote.Core.Network
         private void RemoveDeadSocket(string connectionId)
         {
             _availableWorkerSockets.TryRemove(connectionId, out var worker);
-            worker?.Dispose();
+            worker?.Close();
             _hub.Publish(new ClientDisconnectedEvent(connectionId));
         }
 
@@ -504,7 +369,7 @@ namespace MusicBeeRemote.Core.Network
                         continue;
                     }
 
-                    var isConnected = worker != null && worker.Connected;
+                    var isConnected = worker != null && worker.IsAvailable;
                     if (!isConnected)
                     {
                         RemoveDeadSocket(key);
@@ -519,8 +384,7 @@ namespace MusicBeeRemote.Core.Network
 
                     var clientProtocol = _auth.ClientProtocolVersion(key);
                     var message = broadcastEvent.GetMessage(clientProtocol);
-                    var data = Encoding.UTF8.GetBytes(message + NewLine);
-                    worker.Send(data);
+                    worker.Send(message).Wait();
                 }
             }
             catch (Exception ex)
