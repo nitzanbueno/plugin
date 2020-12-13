@@ -32,5 +32,7 @@ namespace MusicBeeRemote.Core.ApiAdapters
         bool PlayPlaylist(string path);
 
         IEnumerable<string> GetTrackPaths();
+
+        IEnumerable<string> GetPlaylistTrackPaths(string path);
     }
 }

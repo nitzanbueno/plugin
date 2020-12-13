@@ -91,6 +91,7 @@ namespace MusicBeeRemote.Core.Commands
                 Constants.NowPlayingCurrentPosition,
                 container.GetInstance<RequestCurrentPosition>());
             commandExecutor.AddCommand(Constants.NowPlayingDetails, container.GetInstance<RequestDetails>());
+            commandExecutor.AddCommand(Constants.PlaylistListSongs, container.GetInstance<RequestPlaylistListSongs>());
         }
     }
 }

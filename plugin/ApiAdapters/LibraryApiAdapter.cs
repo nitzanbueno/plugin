@@ -235,6 +235,13 @@ namespace MusicBeePlugin.ApiAdapters
         }
 
         /// <inheritdoc/>
+        public IEnumerable<string> GetPlaylistTrackPaths(string path)
+        {
+            _api.Playlist_QueryFilesEx(path, out string[] files);
+            return files;
+        }
+
+        /// <inheritdoc/>
         public Modifications GetSyncDelta(string[] cachedFiles, DateTime lastSync)
         {
             _api.Library_GetSyncDelta(

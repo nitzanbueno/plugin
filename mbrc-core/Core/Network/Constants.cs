@@ -76,6 +76,7 @@
         public const string PodcastArtwork = "podcastartwork";
         public const string NowPlayingCurrentPosition = "nowplayingcurrentposition";
         public const string NowPlayingDetails = "nowplayingdetails";
+        public const string PlaylistListSongs = "playlistlistsongs";
 
         // Protocol Version
         public const int V2 = 2;

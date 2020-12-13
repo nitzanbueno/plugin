@@ -145,6 +145,7 @@
     <Compile Include="Core\Commands\Requests\PlayingTrack\RequestSongInfo.cs" />
     <Compile Include="Core\Commands\Requests\PlayingTrack\RequestLfmLoveRating.cs" />
     <Compile Include="Core\Commands\Requests\Playlists\RequestPlaylistList.cs" />
+    <Compile Include="Core\Commands\Requests\Playlists\RequestPlaylistListSongs.cs" />
     <Compile Include="Core\Commands\Requests\Playlists\RequestPlaylistPlay.cs" />
     <Compile Include="Core\Commands\Requests\Podcasts\RequestPodcastArtworkCommand.cs" />
     <Compile Include="Core\Commands\Requests\Podcasts\RequestPodcastCommand.cs" />

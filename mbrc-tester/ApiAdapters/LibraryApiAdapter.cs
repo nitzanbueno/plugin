@@ -93,5 +93,10 @@ namespace MbrcTester.ApiAdapters
         {
             throw new NotImplementedException();
         }
+
+        public IEnumerable<string> GetPlaylistTrackPaths(string path)
+        {
+            throw new NotImplementedException();
+        }
     }
 }
